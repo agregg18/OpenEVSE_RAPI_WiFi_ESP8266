@@ -5,7 +5,7 @@ Changelog:
 
    - ADDED ESP8266 OTA programming support for Arduino IDE
    - Individual read/write functions have been broken out of loop()
-   - ADDED gridServerRead() - read the current price (scale of 1-4), and requested charge percentage from OpenShift NodeJS server
+   - ADDED gridServerRead() - read the current price (scale of 1-4), and requested charge percentage from OpenShift NodeJS server (http://gridserv-pwrgrid.rhcloud.com/), which follows scheme in the included .jpg
    - ADDED RAPIwrite() sends the current price to the EVSE via a new RAPI command $SP
      -- See OpenEVSE branch for new RAPI command and implementation
    - ADDED several functions for reading Wifi ELM327 CAN bus on Nission LEAF to get Accessory Voltage, SOC, and capacity 
