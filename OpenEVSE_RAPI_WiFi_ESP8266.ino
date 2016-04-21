@@ -274,11 +274,17 @@ void RAPI_read() {
 
 void RAPI_write() {
   char tmpStr[40];
-  sprintf(tmpStr, "$SP %d\r", price); //Send price to OpenEVSE
-  Serial.println(tmpStr);
-  //        sprintf(tmpStr,"$SQ %d\r",request);
-  //        Serial.println(tmpStr);
 
+  //Send current price to OpenEVSE
+  sprintf(tmpStr, "$SP %d", price);
+  //Append checksum (from Lincomatic rapi_checksum)
+  char *s = tmpStr;
+  uint8 chkSum = 0;
+  while (*s) {
+    chkSum += *(s++);
+  }
+  sprintf(s,"*%02X%c",(unsigned)chkSum,0xd);
+  Serial.println(tmpStr);
 }
 
 void parse_CAN_data(char * data) {
@@ -304,8 +310,8 @@ void parse_CAN_data(char * data) {
 }
 
 /*  hex2int() takes a character array with spaces of given len (max 16) and
- *  ignoring spaces, converts to double.
- */
+    ignoring spaces, converts to double.
+*/
 double hex2int(char * a, int len) {
   int k = 0;
   char no_spaces[16] = {NULL};
@@ -459,7 +465,7 @@ void sendToServer() {
 
   String url_pilot = inputID_PILOT;
   url_pilot += pilot;
-  
+
   url += node;
   url += "&json={";
   url += url_amp;
@@ -490,7 +496,7 @@ void sendToServer() {
   if (Veh_AccV != 0) {
     url += url_accV;
   }
-    url += url_pilot;
+  url += url_pilot;
 
   url += "}&devicekey=";
   url += privateKey.c_str();
