@@ -14,6 +14,15 @@
    along with Open EVSE; see the file COPYING.  If not, write to the
    Free Software Foundation, Inc., 59 Temple Place - Suite 330,
    Boston, MA 02111-1307, USA.
+
+   Added - Andrew Gregg / 21 Apr 2016:
+   This version includes the following additions/changes:
+   - ESP8266 OTA for Arduino IDE
+   - Individual read/write functions have been broken out of loop()
+   - gridServerRead() - read the current price (scale of 1-4), and requested charge percentage from OpenShift NodeJS server
+   - RAPIwrite() sends the current price to the EVSE via a new RAPI command $SP
+   - Functions for reading Wifi ELM327 CAN bus on Nission LEAF to get Accessory Voltage, SOC, and capacity (still several issues)
+
 */
 
 #include <ESP8266WiFi.h>
@@ -21,7 +30,7 @@
 #include <ESP8266WebServer.h>
 #include <EEPROM.h>
 
-//OTA includes
+//Added OTA includes - AG
 #include <ESP8266mDNS.h>
 #include <WiFiUdp.h>
 #include <ArduinoOTA.h>
@@ -35,10 +44,32 @@ String st;
 String privateKey = "";
 String node = "";
 
+WiFiClient client;
 
-//SERVER strings and interfers for OpenEVSE Energy Monotoring
-const char* host = "data.openevse.com";
+//SERVER for power grid data server
+const char* grid_host = "gridserv-pwrgrid.rhcloud.com";
+const char* grid_url = "/?";
+const int grid_port = 80;
+
+//SERVER for ELM CANBus reader
+const char* ELM_host = "192.168.0.103";
+const int ELM_port = 35000;
+
+const char ELM_commands[7][20] = {
+  /*{"at z"},*/
+  {"at h1"},
+  {"at d0"},
+  {"at sh 79b"},
+  {"at fc sh 79b"},
+  {"at fc sd 30 00 20"},
+  {"at fc sm 1"},
+  {"21 01"}
+};
+
+//SERVER strings, integers, and doubles for OpenEVSE Energy Monotoring
+const char* e_host = "data.openevse.com";
 const char* e_url = "/emoncms/input/post.json?node=";
+const int e_port = 80;
 const char* inputID_AMP   = "OpenEVSE_AMP:";
 const char* inputID_VOLT   = "OpenEVSE_VOLT:";
 const char* inputID_TEMP1   = "OpenEVSE_TEMP1:";
@@ -46,12 +77,25 @@ const char* inputID_TEMP2   = "OpenEVSE_TEMP2:";
 const char* inputID_TEMP3   = "OpenEVSE_TEMP3:";
 const char* inputID_PILOT   = "OpenEVSE_PILOT:";
 
+//Added - Interactive
+const char* inputID_PRICE   = "OpenEVSE_PRICE:";
+const char* inputID_REQUEST   = "OpenEVSE_REQUEST:";
+const char* inputID_BATTSOC   = "OpenEVSE_BATTSOC:";
+const char* inputID_BATTAH   = "OpenEVSE_BATTAH:";
+const char* inputID_ACCV   = "OpenEVSE_ACCV:";
+
 int amp = 0;
 int volt = 0;
 int temp1 = 0;
 int temp2 = 0;
 int temp3 = 0;
 int pilot = 0;
+//Added - Interactive
+int price = 0;
+int request = -1;
+float Veh_BattSOC = -1;
+float Veh_BattAH = -1;
+float Veh_AccV = 0;
 
 int wifi_mode = 0;
 int buttonState = 0;
@@ -179,6 +223,290 @@ void handleStatus() {
 
 }
 
+void RAPI_read() {
+  Serial.flush();
+  Serial.println("$GE*B0");
+  delay(100);
+  while (Serial.available()) {
+    String rapiString = Serial.readStringUntil('\r');
+    if ( rapiString.startsWith("$OK ") ) {
+      String qrapi;
+      qrapi = rapiString.substring(rapiString.indexOf(' '));
+      pilot = qrapi.toInt();
+    }
+  }
+
+  delay(100);
+  Serial.flush();
+  Serial.println("$GG*B2");
+  delay(100);
+  while (Serial.available()) {
+    String rapiString = Serial.readStringUntil('\r');
+    if ( rapiString.startsWith("$OK") ) {
+      String qrapi;
+      qrapi = rapiString.substring(rapiString.indexOf(' '));
+      amp = qrapi.toInt();
+      String qrapi1;
+      qrapi1 = rapiString.substring(rapiString.lastIndexOf(' '));
+      volt = qrapi1.toInt();
+    }
+  }
+  delay(100);
+  Serial.flush();
+  Serial.println("$GP*BB");
+  delay(100);
+  while (Serial.available()) {
+    String rapiString = Serial.readStringUntil('\r');
+    if (rapiString.startsWith("$OK") ) {
+      String qrapi;
+      qrapi = rapiString.substring(rapiString.indexOf(' '));
+      temp1 = qrapi.toInt();
+      String qrapi1;
+      int firstRapiCmd = rapiString.indexOf(' ');
+      qrapi1 = rapiString.substring(rapiString.indexOf(' ', firstRapiCmd + 1 ));
+      temp2 = qrapi1.toInt();
+      String qrapi2;
+      qrapi2 = rapiString.substring(rapiString.lastIndexOf(' '));
+      temp3 = qrapi2.toInt();
+    }
+  }
+}
+
+void RAPI_write() {
+  char tmpStr[40];
+  sprintf(tmpStr, "$SP %d\r", price); //Send price to OpenEVSE
+  Serial.println(tmpStr);
+  //        sprintf(tmpStr,"$SQ %d\r",request);
+  //        Serial.println(tmpStr);
+
+}
+
+void parse_CAN_data(char * data) {
+  char SOC_temp[8], AH_temp[8];
+  char * sep_tok = "\r"; //Token for split
+  char *lines[16] = {NULL};
+  lines[0] = strtok(data, sep_tok);
+  int i = 0;
+  while (lines[i] != NULL) {
+    i++;
+    lines[i] = strtok(NULL, sep_tok);
+  }
+  int j = 0;
+  for (j = 0; j < 8; j++)
+    SOC_temp[j] = lines[5][19 + j];
+  int l = 0;
+  for (l = 0; l < 8; l++)
+    AH_temp[l] = lines[6][10 + l];
+
+  Veh_BattSOC = hex2int(SOC_temp, 8) / 10000;
+  Veh_BattAH = hex2int(AH_temp, 8) / 10000;
+  return;
+}
+
+/*  hex2int() takes a character array with spaces of given len (max 16) and
+ *  ignoring spaces, converts to double.
+ */
+double hex2int(char * a, int len) {
+  int k = 0;
+  char no_spaces[16] = {NULL};
+  int k_nosp = 0;
+  double val = 0;
+  no_spaces[0] = '0';
+  no_spaces[1] = 'x';
+  for (k = 0; k < len; k++) {
+    if (a[k] != 0x20) //skip ASCII spaces
+    {
+      no_spaces[k_nosp + 2] = a[k];
+      k_nosp++;
+    }
+  }
+  val = strtol(no_spaces, NULL, 16);
+  return val;
+}
+
+void ELM_read() {
+  //Establish connection to CANBus reader and retrieve SOC (%), capacity (Ah), and AccV (V)
+  // Use WiFiClient class to create TCP connection to CAN reader
+  if (!client.connect(ELM_host, ELM_port)) {
+    Serial.println("Connection error to CANreader\r");
+    Veh_BattSOC = -1;
+    Veh_BattAH = -1;
+    Veh_AccV = 0;
+    return;
+  }
+  else {
+    int arraysize = sizeof (ELM_commands) / sizeof (ELM_commands[0]);
+    char count = 0;
+    String ELM_string;
+    char ELM_buff[200];
+    char temp_s[40];
+    char i, x = 0;
+
+    // ELM_wake();
+
+    client.setTimeout(3000);
+
+    //Read LEAF Accessory Battery Voltage
+    client.print("at rv\r");
+    delay(10);
+
+
+    if (client.available())
+      ELM_string = client.readStringUntil('>');
+    i = 0;
+    for (i = 0; i < ELM_string.length(); i++) {
+      ELM_buff[i] = ELM_string.charAt(i);
+    }
+    Veh_AccV = strtod(strchr(ELM_buff, '\r'), NULL);//Skip first line, then look for the float
+    //client.print("$FP 0 0 AccV= ");
+    //client.println(Veh_AccV);
+
+    for (count = 0; count < arraysize; count++) {
+      sprintf(temp_s, "%s\r", ELM_commands[count]);
+      client.print(temp_s);
+      delay(10);
+
+      if (client.available())
+        ELM_string = client.readStringUntil('>');
+
+      if (ELM_string.length() > 48) {
+        i = 0;
+        for (i = 0; i < ELM_string.length(); i++) {
+          ELM_buff[i] = ELM_string.charAt(i);
+        }
+        parse_CAN_data(ELM_buff);
+        Serial.print("$FP 0 0 SOC= ");
+        Serial.println(Veh_BattSOC);
+        Serial.print("$FP 0 1 AH= ");
+        Serial.println(Veh_BattAH);
+      }
+    }
+
+    client.flush();
+    // ELM_sleep();
+  }
+}
+
+void gridServer_read() {
+  // Use WiFiClient class to create TCP connection to power grid server
+  if (!client.connect(grid_host, grid_port)) {
+    //Serial.println("Connection error to gcloud\r");
+    price = 0;
+    return;
+  }
+
+  //Read pricing signal and request from server
+  client.print(String("GET ") + grid_url + " HTTP/1.1\r\n" + "Host: " + grid_host + "\r\n" + "Connection: close\r\n\r\n");
+  delay(100);
+
+  String grid_line;
+  while (client.connected()) {
+    grid_line = client.readStringUntil('\r'); //Content is on last line, after all headers
+  }
+  //Serial.println(grid_line + "\r");
+  String qprice;
+  qprice = grid_line.substring(0, grid_line.indexOf(' '));
+  price = qprice.toInt();
+
+  String qrequest;
+  qrequest = grid_line.substring(grid_line.indexOf(' '));
+  request = qrequest.toInt();
+
+  client.flush();
+}
+
+void sendToServer() {
+  // Establish new connection to OpenEVSE Emoncms
+  if (!client.connect(e_host, e_port)) {
+    return;
+  }
+
+  // We now create a URL for OpenEVSE RAPI data upload request
+  String url = e_url;
+  String url_amp = inputID_AMP;
+  url_amp += amp;
+  url_amp += ",";
+  String url_volt = inputID_VOLT;
+  url_volt += volt;
+  url_volt += ",";
+  String url_temp1 = inputID_TEMP1;
+  url_temp1 += temp1;
+  url_temp1 += ",";
+  String url_temp2 = inputID_TEMP2;
+  url_temp2 += temp2;
+  url_temp2 += ",";
+  String url_temp3 = inputID_TEMP3;
+  url_temp3 += temp3;
+  url_temp3 += ",";
+
+  //Added - AG
+  String url_price = inputID_PRICE;
+  url_price += price;
+  url_price += ",";
+  String url_request = inputID_REQUEST;
+  url_request += request;
+  url_request += ",";
+  String url_battSOC = inputID_BATTSOC;
+  url_battSOC += Veh_BattSOC;
+  url_battSOC += ",";
+  String url_battAH = inputID_BATTAH;
+  url_battAH += Veh_BattAH;
+  url_battAH += ",";
+  String url_accV = inputID_ACCV;
+  url_accV += Veh_AccV;
+  url_accV += ",";
+  //End Added - AG
+
+  String url_pilot = inputID_PILOT;
+  url_pilot += pilot;
+  
+  url += node;
+  url += "&json={";
+  url += url_amp;
+  if (volt <= 0) {
+    url += url_volt;
+  }
+  if (temp1 != 0) {
+    url += url_temp1;
+  }
+  if (temp2 != 0) {
+    url += url_temp2;
+  }
+  if (temp3 != 0) {
+    url += url_temp3;
+  }
+  if (price != 0) {
+    url += url_price;
+  }
+  if (request != -1) {
+    url += url_request;
+  }
+  if (Veh_BattSOC != -1) {
+    url += url_battSOC;
+  }
+  if (Veh_BattAH != -1) {
+    url += url_battAH;
+  }
+  if (Veh_AccV != 0) {
+    url += url_accV;
+  }
+    url += url_pilot;
+
+  url += "}&devicekey=";
+  url += privateKey.c_str();
+
+  // This will send the request to the server
+  client.print(String("GET ") + url + " HTTP/1.1\r\n" + "Host: " + e_host + "\r\n" + "Connection: close\r\n\r\n");
+  delay(10);
+  while (client.available()) {
+    String line = client.readStringUntil('\r');
+  }
+  //Serial.println(e_host);
+  //Serial.println(url);
+
+  client.flush();
+}
+
 void setup() {
   delay(1000);
   Serial.begin(115200);
@@ -294,13 +622,13 @@ void setup() {
     //Serial.println("Connected as a Client");
     IPAddress myAddress = WiFi.localIP();
     //Serial.println(myAddress);
-    Serial.println("$FP 0 0 Client-IP.......");
-    delay(100);
-    sprintf(tmpStr, "$FP 0 1 %d.%d.%d.%d", myAddress[0], myAddress[1], myAddress[2], myAddress[3]);
-    Serial.println(tmpStr);
+    //Serial.println("$FP 0 0 Client-IP.......");
+    //delay(100);
+    //sprintf(tmpStr, "$FP 0 1 %d.%d.%d.%d", myAddress[0], myAddress[1], myAddress[2], myAddress[3]);
+    //Serial.println(tmpStr);
   }
 
-  //OTA programming
+  //Added OTA lines below - AG
   ArduinoOTA.onStart([]() {
     Serial.println("Start");
   });
@@ -335,12 +663,14 @@ void setup() {
 
 
 void loop() {
-  
+
   //Handle OTA reprogram requests
   ArduinoOTA.handle();
-  
+
+  //Handle web server
   server.handleClient();
 
+  //Handle GPIO 0 to wipe AP and API key data from EEPROM
   int erase = 0;
   buttonState = digitalRead(0);
   while (buttonState == LOW) {
@@ -362,111 +692,25 @@ void loop() {
     }
   }
 
+  //If connected as a Wifi client with a privateKey, perform the following every 10 sec
   if (wifi_mode == 0 && privateKey != 0) {
-    if ((millis() - Timer) >= 30000) {
+    if ((millis() - Timer) >= 10000) {
       Timer = millis();
-      Serial.flush();
-      Serial.println("$GE*B0");
-      delay(100);
-      while (Serial.available()) {
-        String rapiString = Serial.readStringUntil('\r');
-        if ( rapiString.startsWith("$OK ") ) {
-          String qrapi;
-          qrapi = rapiString.substring(rapiString.indexOf(' '));
-          pilot = qrapi.toInt();
-        }
-      }
 
-      delay(100);
-      Serial.flush();
-      Serial.println("$GG*B2");
-      delay(100);
-      while (Serial.available()) {
-        String rapiString = Serial.readStringUntil('\r');
-        if ( rapiString.startsWith("$OK") ) {
-          String qrapi;
-          qrapi = rapiString.substring(rapiString.indexOf(' '));
-          amp = qrapi.toInt();
-          String qrapi1;
-          qrapi1 = rapiString.substring(rapiString.lastIndexOf(' '));
-          volt = qrapi1.toInt();
-        }
-      }
-      delay(100);
-      Serial.flush();
-      Serial.println("$GP*BB");
-      delay(100);
-      while (Serial.available()) {
-        String rapiString = Serial.readStringUntil('\r');
-        if (rapiString.startsWith("$OK") ) {
-          String qrapi;
-          qrapi = rapiString.substring(rapiString.indexOf(' '));
-          temp1 = qrapi.toInt();
-          String qrapi1;
-          int firstRapiCmd = rapiString.indexOf(' ');
-          qrapi1 = rapiString.substring(rapiString.indexOf(' ', firstRapiCmd + 1 ));
-          temp2 = qrapi1.toInt();
-          String qrapi2;
-          qrapi2 = rapiString.substring(rapiString.lastIndexOf(' '));
-          temp3 = qrapi2.toInt();
-        }
-      }
+      //Read values from EVSE via RAPI
+      RAPI_read();
 
-      // Use WiFiClient class to create TCP connections
-      WiFiClient client;
-      const int httpPort = 80;
-      if (!client.connect(host, httpPort)) {
-        return;
-      }
+      //Read CANbus data
+      //ELM_read();
 
-      // We now create a URL for OpenEVSE RAPI data upload request
-      String url = e_url;
-      String url_amp = inputID_AMP;
-      url_amp += amp;
-      url_amp += ",";
-      String url_volt = inputID_VOLT;
-      url_volt += volt;
-      url_volt += ",";
-      String url_temp1 = inputID_TEMP1;
-      url_temp1 += temp1;
-      url_temp1 += ",";
-      String url_temp2 = inputID_TEMP2;
-      url_temp2 += temp2;
-      url_temp2 += ",";
-      String url_temp3 = inputID_TEMP3;
-      url_temp3 += temp3;
-      url_temp3 += ",";
-      String url_pilot = inputID_PILOT;
-      url_pilot += pilot;
-      url += node;
-      url += "&json={";
-      url += url_amp;
-      if (volt <= 0) {
-        url += url_volt;
-      }
-      if (temp1 != 0) {
-        url += url_temp1;
-      }
-      if (temp2 != 0) {
-        url += url_temp2;
-      }
-      if (temp3 != 0) {
-        url += url_temp3;
-      }
-      url += url_pilot;
-      url += "}&devicekey=";
-      url += privateKey.c_str();
+      //Read price and request from power grid server
+      gridServer_read();
 
-      // This will send the request to the server
-      client.print(String("GET ") + url + " HTTP/1.1\r\n" + "Host: " + host + "\r\n" + "Connection: close\r\n\r\n");
-      delay(10);
-      while (client.available()) {
-        String line = client.readStringUntil('\r');
-      }
-      //Serial.println(host);
-      //Serial.println(url);
+      //Write values to EVSE via RAPI
+      RAPI_write();
 
+      //Send data to OpenEVSE Emoncms
+      sendToServer();
     }
   }
-
 }
