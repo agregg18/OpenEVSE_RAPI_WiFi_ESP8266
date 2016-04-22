@@ -1,0 +1,99 @@
+<!doctype html>
+<html>
+    <title>OpenEVSE Configuration Tool</title>
+    <body onload="updateDate(), updateTime(), updateResponse(); dt = setInterval('updateTime()', 1000 )">
+
+    <font size='20'>
+        <font color=006666>Open</font><b>EVSE</b>
+    </font>
+    <p>
+        <b>Open Source Hardware</b>
+    <p>    
+    <form method='get' action='s'>
+        <h4>Delay Timer</h4>
+        
+            <input id= "timerEnabled" type="checkbox" name="ST" value = "1" unchecked onchange="validateTimer()"> Enabled
+            <ul><li>Start Time: <input id= "timerStart" type="time" name="timerStart" value="23:10" step = "60" disabled></li>
+            <li>Stop Time: <input id = "timerStop" type="time" name="timerStop" value="04:50" step = "60" disabled>   <label id='0'></label> </li>
+    </ul>
+        <h4>Setup</h4>
+        <ul>
+    <li>Date: <input type="date" id = "date" name="currDate" value="2016-04-01"> Time: <input type="time" id = "time" name="currTime" value="12:00:00" onchange="clearInterval(dt)" step = "1" ><label id='1'></label></li>
+    <li>Backlight Type: 
+            <input type="radio" name="S0" value="0">Monochrome
+            <input type="radio" name="S0" value="1" checked>RGB   <label id='2'></label></li>
+    <li>Service Level: 
+            <input type="radio" id = "SL1" name="SL" value="1" onchange="validateLevel()">L1
+            <input type="radio" id = "SL2" name="SL" value="2" onchange="validateLevel()">L2  
+            <input type="radio" id = "SLA" name="SL" value="A" onchange="validateLevel()" checked>Auto   <label id='3'></label></li>
+    <li>Max Current (A): <input id = "maxCurrent" type = "number" name='SC' min="6" max="80" step="2" value = "24">   <label id='4'></label></li>
+            
+    <li>Safety Checks:
+    <br><input type="checkbox" name="SD" value="1" checked>Diode Check   <label id='5'></label>
+    <br><input type="checkbox" name="SV" value="1" checked>Vent Req'd Check   <label id='6'></label>
+    <br><input type="checkbox" name="SG" value="1" checked>Ground Check   <label id='7'></label>
+    <br><input type="checkbox" name="SR" value="1" checked>Stuck Relay Check   <label id='8'></label>
+    <br><input type="checkbox" name="SS" value="1" checked>GFI Self Test   <label id='9'></label>
+    <!--<br><input type="checkbox" name="" value="1" checked>Temp Check</li>-->
+    </ul>
+
+        <input type='submit'>
+
+    </form>
+     </body> 
+    
+        <script>
+        function updateDate ( )
+        {
+            var currentTime = new Date ( );
+            var currentYear = currentTime.getFullYear();
+            var currentMonth = currentTime.getMonth() + 1;
+            var currentDay = currentTime.getUTCDate();
+
+            // Pad the month and day with leading zeros, if required
+            currentMonth = ( currentMonth < 10 ? "0" : "" ) + currentMonth;
+            currentDay = ( currentDay < 10 ? "0" : "" ) + currentDay;
+
+             // Update the date display
+            document.getElementById("date").value = currentYear + "-" + currentMonth + "-" + currentDay; 
+
+        }
+
+        function updateTime ()
+        {
+            var currentTime = new Date ( );
+            var currentHours = currentTime.getHours ( );
+            var currentMinutes = currentTime.getMinutes ( );
+            var currentSeconds = currentTime.getSeconds ( );
+
+            // Pad the minutes and seconds with leading zeros, if required
+            currentMinutes = ( currentMinutes < 10 ? "0" : "" ) + currentMinutes;
+            currentSeconds = ( currentSeconds < 10 ? "0" : "" ) + currentSeconds;
+     
+            // Update the time display
+            document.getElementById("time").value = currentHours + ":" + currentMinutes + ":" + currentSeconds;
+
+        }
+        
+        function validateTimer() {
+            var timer = document.getElementById('timerEnabled').checked;
+            document.getElementById('timerStart').disabled = !timer; 
+            document.getElementById('timerStop').disabled = !timer;
+        } 
+        
+        function validateLevel() {
+            if (document.getElementById('SL1').checked) {
+                document.getElementById('maxCurrent').value = "12"; 
+                document.getElementById('maxCurrent').min = "6";
+                document.getElementById('maxCurrent').max = "16";
+            } else if (document.getElementById('SL2').checked) {
+                document.getElementById('maxCurrent').value = "24"; 
+                document.getElementById('maxCurrent').min = "10";
+                document.getElementById('maxCurrent').max = "80";
+            }  else if (document.getElementById('SLA').checked) {
+                document.getElementById('maxCurrent').value = "24"; 
+                document.getElementById('maxCurrent').min = "6";
+                document.getElementById('maxCurrent').max = "80";
+            }
+        }
+        function updateResponse() {

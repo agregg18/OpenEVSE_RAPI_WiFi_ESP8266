@@ -35,6 +35,9 @@
 #include <WiFiUdp.h>
 #include <ArduinoOTA.h>
 
+//Filesystem to read files in /data
+#include "FS.h"
+
 ESP8266WebServer server(80);
 
 //Default SSID and PASSWORD for AP Access Point Mode
@@ -155,6 +158,83 @@ void handleRapiR() {
   server.send(200, "text/html", s);
 }
 
+void handleSetup() {
+  SPIFFS.begin(); // mount the fs
+  File f = SPIFFS.open("/setup.html", "r");
+  if (f) {
+    String s = f.readString();
+    s += "}</script></html>\r\n\r\n";
+    server.send(200, "text/html", s);
+    f.close();
+  }
+}
+
+void handleSetupS() {
+  String commandStrings[10];
+  String responseStrings[10];
+
+  //Delay Timer
+  if (server.hasArg("ST")) {
+    String start = server.arg("timerStart");
+    start.replace(":", " ");
+    String stop = server.arg("timerStop");
+    stop.replace(":", " ");
+    commandStrings[0] = "$ST " + start + " " + stop;
+  }  else commandStrings[0] = "$ST 0 0 0 0"; //Cancel timer
+
+  //Set Date/Time
+  String date = server.arg("currDate");
+  date = date.substring(2); //Strip first two digits of year
+  date.replace("-", " ");
+  String ctime = server.arg("currTime");
+  ctime.replace(":", " ");
+  commandStrings[1] =  "$S1 " + date + " " + ctime;
+
+  //Backlight
+  commandStrings[2] = "$S0 " + server.arg("S0");
+
+  //Service Level
+  commandStrings[3] = "$SL " + server.arg("SL");
+
+  //Max Current
+  commandStrings[4] = "$SC " + server.arg("SC");
+
+  //Checkboxes
+  commandStrings[5] = "$SD " + (server.hasArg("SD") ? server.arg("SD") : "0");
+  commandStrings[6] = "$SV " + (server.hasArg("SV") ? server.arg("SV") : "0");
+  commandStrings[7] = "$SG " + (server.hasArg("SG") ? server.arg("SG") : "0");
+  commandStrings[8] = "$SR " + (server.hasArg("SR") ? server.arg("SR") : "0");
+  commandStrings[9] = "$SS " + (server.hasArg("SS") ? server.arg("SS") : "0");
+
+  Serial.flush();
+
+  uint i = 0;
+  for (i = 0; i < 10; i++) {
+    commandStrings[i] += checkSum(commandStrings[i]); //add Checksum to each command
+    Serial.println(commandStrings[i]);
+    delay(100);
+    while (Serial.available()) {
+      responseStrings[i] += Serial.readStringUntil('\r');
+    }
+  }
+
+  //display response and setup.html again
+  SPIFFS.begin(); // mount the fs
+  File f = SPIFFS.open("/setup.html", "r");
+  if (f) {
+    String s = f.readString();
+    uint a = 0;
+    for (a = 0; a < 10; a++) {
+      s += "document.getElementById(\"";
+      s += a;
+      s += "\").innerHTML = \"<font color = ff0000>" + responseStrings[a] + " </font>\";";
+    }
+    s += "}</script></html>\r\n\r\n";
+    server.send(200, "text/html", s);
+    f.close();
+  }
+}
+
 void handleCfg() {
   String s;
   String qsid = server.arg("ssid");
@@ -273,18 +353,23 @@ void RAPI_read() {
 }
 
 void RAPI_write() {
-  char tmpStr[40];
+  String tmpStr = "$SP " + price;
 
   //Send current price to OpenEVSE
-  sprintf(tmpStr, "$SP %d", price);
-  //Append checksum (from Lincomatic rapi_checksum)
-  char *s = tmpStr;
+  Serial.println(tmpStr + checkSum(tmpStr));
+}
+
+String checkSum(String command) {
+  //Create checksum (from Lincomatic rapi_checksum)
+  char buff[40];
+  command.toCharArray(buff, command.length() + 1);
+  char *s = buff;
   uint8 chkSum = 0;
   while (*s) {
     chkSum += *(s++);
   }
-  sprintf(s,"*%02X%c",(unsigned)chkSum,0xd);
-  Serial.println(tmpStr);
+  sprintf(s, "*%02X%c", (unsigned)chkSum, 0xd);
+  return s;
 }
 
 void parse_CAN_data(char * data) {
@@ -657,9 +742,11 @@ void setup() {
   server.on("/", handleRoot);
   server.on("/a", handleCfg);
   server.on("/r", handleRapiR);
+  server.on("/s", handleSetupS);
   server.on("/reset", handleRst);
   server.on("/status", handleStatus);
   server.on("/rapi", handleRapi);
+  server.on("/setup", handleSetup);
   server.begin();
   //Serial.println("HTTP server started");
   delay(100);
