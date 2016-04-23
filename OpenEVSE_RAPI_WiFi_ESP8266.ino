@@ -353,10 +353,11 @@ void RAPI_read() {
 }
 
 void RAPI_write() {
-  String tmpStr = "$SP " + price;
-
   //Send current price to OpenEVSE
-  Serial.println(tmpStr + checkSum(tmpStr));
+  String tmpStr = "$SP ";
+  tmpStr += price;
+  tmpStr += checkSum(tmpStr);
+  Serial.println(tmpStr);
 }
 
 String checkSum(String command) {
